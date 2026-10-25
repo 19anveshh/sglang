@@ -40,7 +40,7 @@ pub use parser::{
 #[cfg(feature = "render")]
 pub use render::{
     ChatFormatter, ChatFormatterOptions, DeepSeekTokenizer, OneOrMany, TemplateArgs, TemplateError,
-    ThinkingTemplates, load_chat_formatter, requested_effort, requested_thinking,
+    ThinkingTemplates, extract_images, load_chat_formatter, requested_effort, requested_thinking,
     select_chat_formatter,
 };
 #[cfg(any(feature = "parser", feature = "openai"))]
