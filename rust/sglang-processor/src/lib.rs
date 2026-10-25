@@ -8,6 +8,8 @@
 mod error;
 #[cfg(any(feature = "parser", feature = "openai"))]
 mod kimi_k3_format;
+#[cfg(feature = "mm")]
+mod mm;
 mod model_files;
 #[cfg(feature = "openai")]
 pub mod openai;
@@ -26,6 +28,8 @@ mod tokenizer;
 mod tool_call;
 
 pub use error::ProcessorError;
+#[cfg(feature = "mm")]
+pub use mm::{MmOutput, MmOutputItem, MmProcessor};
 pub use model_files::{resolve_model_file, resolve_tokenizer_file};
 #[cfg(feature = "parser")]
 pub use parser::{
@@ -46,6 +50,8 @@ pub use tokenizer::{DynamoTokenizer, TextTokenizer, load_tokenizer};
 
 // Dynamo crates whose types appear in this crate's public API. Hosts use these
 // re-exports so their Dynamo versions always match the processor's.
+#[cfg(feature = "mm")]
+pub use dynamo_multimodal;
 #[cfg(feature = "parser")]
 pub use dynamo_parsers;
 #[cfg(any(feature = "parser", feature = "render"))]
