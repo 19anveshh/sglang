@@ -47,8 +47,46 @@ impl ChatFormatter {
         args: &TemplateArgs,
     ) -> Result<RenderedPrompt, TemplateError> {
         let args = args.kwargs.clone();
+        if let ChatFormatter::HuggingFace {
+            content_parts: true,
+            ..
+        } = self
+        {
+            let request = &join_text_parts(request)?;
+            return self.render_prompt(&TemplateArgsRequest { request, args });
+        }
         self.render_prompt(&TemplateArgsRequest { request, args })
     }
+}
+
+/// Python hands a content-parts template an all-text part list as is, and those
+/// templates (Qwen-VL, Qwen3.5) concatenate the parts. Dynamo would join them
+/// with newlines, so concatenate them here first.
+fn join_text_parts(
+    request: &CreateChatCompletionRequest,
+) -> Result<CreateChatCompletionRequest, TemplateError> {
+    let renderer_error = |error: serde_json::Error| TemplateError::Renderer {
+        message: error.to_string(),
+    };
+    let mut messages = serde_json::to_value(&request.messages).map_err(renderer_error)?;
+    for content in (messages.as_array_mut().into_iter().flatten())
+        .filter_map(|message| message.get_mut("content"))
+    {
+        if let Some(parts) = content
+            .as_array()
+            .filter(|parts| !parts.is_empty() && parts.iter().all(|part| part["type"] == "text"))
+        {
+            *content = parts
+                .iter()
+                .filter_map(|part| part["text"].as_str())
+                .collect::<String>()
+                .into();
+        }
+    }
+    Ok(CreateChatCompletionRequest {
+        messages: serde_json::from_value(messages).map_err(renderer_error)?,
+        ..request.clone()
+    })
 }
 
 #[cfg(test)]
@@ -56,6 +94,40 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// Qwen2.5-VL's template iterates content parts, so Python keeps them and the
+    /// template concatenates the text parts: `One.Two.`, not Dynamo's `One.\nTwo.`.
+    #[test]
+    fn content_parts_template_concatenates_text_parts() {
+        let template = "{% for message in messages %}<|im_start|>{{ message['role'] }}\n{% if message['content'] is string %}{{ message['content'] }}<|im_end|>\n{% else %}{% for content in message['content'] %}{% if content['type'] == 'image' or 'image' in content or 'image_url' in content %}<|vision_start|><|image_pad|><|vision_end|>{% elif 'text' in content %}{{ content['text'] }}{% endif %}{% endfor %}<|im_end|>\n{% endif %}{% endfor %}{% if add_generation_prompt %}<|im_start|>assistant\n{% endif %}";
+        let formatter =
+            ChatFormatter::from_tokenizer_config(&json!({ "chat_template": template })).unwrap();
+        let request: CreateChatCompletionRequest = serde_json::from_value(json!({
+            "model": "test",
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA=="}},
+                    {"type": "text", "text": "Describe."},
+                ]},
+                {"role": "assistant", "content": "A cat."},
+                {"role": "user", "content": [
+                    {"type": "text", "text": "One."},
+                    {"type": "text", "text": "Two."},
+                ]},
+            ]
+        }))
+        .unwrap();
+        let prompt = formatter
+            .render_template(&request, &TemplateArgs::default())
+            .unwrap()
+            .into_text();
+        assert_eq!(
+            prompt,
+            "<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>Describe.<|im_end|>\n\
+             <|im_start|>assistant\nA cat.<|im_end|>\n\
+             <|im_start|>user\nOne.Two.<|im_end|>\n<|im_start|>assistant\n"
+        );
+    }
 
     /// `reasoning_effort` sets both thinking toggles beneath the request's own
     /// kwargs, and the server defaults fill in only what is left.
