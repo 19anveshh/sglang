@@ -29,7 +29,7 @@ mod tool_call;
 
 pub use error::ProcessorError;
 #[cfg(feature = "mm")]
-pub use mm::{MmOutput, MmOutputItem, MmProcessor};
+pub use mm::{MmOutput, MmOutputItem, MmPipelineSpec, MmProcessor};
 pub use model_files::{resolve_model_file, resolve_tokenizer_file};
 #[cfg(feature = "parser")]
 pub use parser::{
