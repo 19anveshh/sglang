@@ -17,7 +17,7 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::chat::{ChatBody, ChatRequest};
-use super::template::{RenderedChat, render_chat};
+use super::template::{RenderedChat, render_chat_off_executor};
 use super::{AppState, contains_media};
 use crate::api_server::core::CoreError;
 use crate::message::types::{OneOrMany, TokenIds};
@@ -116,7 +116,7 @@ async fn tokenize(
         (Some(prompt), None) => (prompt, body.add_special_tokens),
         // Encoded as on the chat path (Python's `add_special_tokens=False`).
         (None, Some(messages)) => {
-            let rendered = match render_chat_prompt(&state, messages, body.rest) {
+            let rendered = match render_chat_prompt(&state, messages, body.rest).await {
                 Ok(rendered) => rendered,
                 Err((error_type, message)) => {
                     return error_body(StatusCode::BAD_REQUEST, error_type, message);
@@ -154,7 +154,7 @@ async fn tokenize(
 /// `TokenizeRequest.to_chat_completion_request`: every other tokenize field
 /// except `prompt` and `add_special_tokens` carries over to the chat request.
 /// A failure is a 400, returned as its error type and message.
-fn render_chat_prompt(
+async fn render_chat_prompt(
     state: &AppState,
     messages: Value,
     mut fields: Map<String, Value>,
@@ -183,12 +183,15 @@ fn render_chat_prompt(
     let Some(formatter) = &state.chat_formatter else {
         return Err((BAD_REQUEST, "this model has no usable chat template".into()));
     };
-    render_chat(
+    render_chat_off_executor(
+        &state.chat_encodes,
         formatter,
         body,
         &request,
         &state.server_args.default_chat_template_kwargs,
     )
+    .await
+    .map(|(rendered, _)| rendered)
     .map_err(|error| (BAD_REQUEST, format!("chat template render failed: {error}")))
 }
 
@@ -306,6 +309,7 @@ mod tests {
             ),
             generate_hook: None,
             openai_chat: None,
+            chat_encodes: Default::default(),
         })
     }
 

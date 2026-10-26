@@ -6,6 +6,7 @@ use std::ops::Range;
 
 use deepseek_recipe::openai::ChatCompletionRequest;
 use deepseek_recipe::request::{ConversionOptions, ProtocolRequest};
+use deepseek_recipe_core::multimodal::ImageSource;
 use deepseek_recipe_core::special_tokens::SpecialTokensMap;
 use deepseek_recipe_encoding::PromptEncoding;
 use deepseek_recipe_encoding::v4::dsv4::DeepseekV4Encoding;
@@ -83,12 +84,13 @@ impl std::fmt::Debug for DeepSeekTokenizer {
     }
 }
 
-/// Render an SGLang chat request body for DeepSeek-V4 (`v41` false) or V4.1.
+/// Render an SGLang chat request body for DeepSeek-V4 (`v41` false) or V4.1,
+/// with its image sources in placeholder order.
 pub(crate) fn render(
     v41: bool,
     request: Value,
     defaults: &HashMap<String, Value>,
-) -> Result<RenderedPrompt, String> {
+) -> Result<(RenderedPrompt, Vec<String>), String> {
     let thinking = thinking(&request, defaults);
     let (effort, budget) = effort(v41, &request, defaults)?;
     let task = request
@@ -173,10 +175,14 @@ pub(crate) fn render(
             .with_special_tokens(tokens())
             .render_conversation(&converted.conversation)
     };
-    // The processor serves text only; SGLang rejects images on a text-only server.
-    if !rendered.image_sources.is_empty() {
-        return Err("image input is not supported for this model".into());
-    }
+    // `deepseek_recipe_renderer.py`: `source.url or source.data_url`.
+    let images = (rendered.image_sources.into_iter())
+        .map(|source| match source {
+            ImageSource::Url { url, .. } => Ok(url),
+            ImageSource::DataUrl { data_url, .. } => Ok(data_url),
+            ImageSource::Bytes { .. } => Err("image bytes are not a chat image source"),
+        })
+        .collect::<Result<_, _>>()?;
     let mut segments = segments(&rendered.prompt, &rendered.special_ranges);
     if let Some(budget) = budget.filter(|_| thinking) {
         replace_effort_budget(&mut segments, budget)?;
@@ -188,7 +194,7 @@ pub(crate) fn render(
         // `encode_text`: the checkpoint tokenizer with its special tokens.
         segments.push(RenderedSegment::new(prefix, true));
     }
-    Ok(RenderedPrompt::segmented(segments))
+    Ok((RenderedPrompt::segmented(segments), images))
 }
 
 /// `serving_chat.py`: kwargs `thinking` wins, then what `reasoning` and the
